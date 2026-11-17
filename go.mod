@@ -1,6 +1,6 @@
 module github.com/ocrosby/jsonplaceholder-mcp-server
 
-go 1.26.6
+go 1.26.11
 
 require github.com/mark3labs/mcp-go v1.5.0
 
