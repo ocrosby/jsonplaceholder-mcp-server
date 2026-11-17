@@ -1,33 +1,75 @@
 # jsonplaceholder-mcp-server
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server, written in Go, that gives an MCP client read-only access to [JSONPlaceholder](https://jsonplaceholder.typicode.com): users, posts, comments, albums, photos and todos.
+A [Model Context Protocol](https://modelcontextprotocol.io) server, written in Go, that gives an AI assistant read-only access to [JSONPlaceholder](https://jsonplaceholder.typicode.com): users, posts, comments, albums, photos and todos.
 
 <p align="center">
-  <a href="#install">Install</a> · <a href="#usage">Usage</a> · <a href="#tools">Tools</a> · <a href="#configuration">Configuration</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a>
+  <a href="#what-it-does">What it does</a> · <a href="#install">Install</a> · <a href="#connect-a-client">Connect a client</a> · <a href="#tools">Tools</a> · <a href="#configuration">Configuration</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a>
 </p>
 
+## What it does
+
+Once connected, your assistant can look up JSONPlaceholder's fake REST data by calling tools instead of guessing or you pasting JSON. It is useful as a safe, no-credentials MCP server for learning MCP, demoing tool use, or testing a client. The data is static test data, not real people or content.
+
+Try asking:
+
+- "List the users and tell me which one has the most completed todos."
+- "Show me the comments on post 7."
+- "What albums does user 3 own, and what are the first five photos in the first one?"
+- "Which of user 2's todos are still open?"
+
+The assistant picks the right tool, filters and pages for you. Nothing is ever written: JSONPlaceholder fakes writes, so the server only reads.
+
 ## Install
+
+Requires Go 1.26 or later.
 
 ```bash
 go install github.com/ocrosby/jsonplaceholder-mcp-server/cmd/jsonplaceholder-mcp-server@latest
 ```
 
-Or build from a checkout with `make build` (binary at `bin/jsonplaceholder-mcp-server`).
+This puts the binary in `$(go env GOPATH)/bin` (usually `~/go/bin`). Make sure that directory is on your `PATH`, or use the full path in the commands below. You can also build from a checkout with `make build` (binary at `bin/jsonplaceholder-mcp-server`).
 
-## Usage
+## Connect a client
 
-**stdio (default)**: the client spawns the server. For Claude Code:
+### Claude Code
 
 ```bash
-claude mcp add jsonplaceholder -- jsonplaceholder-mcp-server
+claude mcp add --scope user jsonplaceholder -- jsonplaceholder-mcp-server
 ```
 
-**streamable-http**: stateless, for networked use.
+`--scope user` makes the server available in every project. Use `--scope project` to share it with a team through `.mcp.json`, or omit the flag for just the current project. If the binary is not on your `PATH`, pass its full path instead of the bare name.
+
+Verify the connection, then start a new session so the tools load:
+
+```bash
+claude mcp list        # jsonplaceholder: ... ✔ Connected
+```
+
+Inside Claude Code, `/mcp` shows the server and its 12 tools.
+
+### Claude Desktop and other stdio clients
+
+Add this to the client's MCP config (for Claude Desktop, `claude_desktop_config.json`), using the full path to the binary:
+
+```json
+{
+  "mcpServers": {
+    "jsonplaceholder": {
+      "command": "/Users/you/go/bin/jsonplaceholder-mcp-server"
+    }
+  }
+}
+```
+
+### Over HTTP
+
+For networked or shared use, run the server with the stateless streamable-http transport and point a client at it:
 
 ```bash
 MCP_TRANSPORT=streamable-http PORT=8000 jsonplaceholder-mcp-server
 # MCP endpoint:  http://localhost:8000/mcp
 # Probes:        /livez  /readyz  /health
+
 claude mcp add --transport http jsonplaceholder http://localhost:8000/mcp
 ```
 
