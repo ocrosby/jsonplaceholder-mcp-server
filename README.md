@@ -3,7 +3,7 @@
 A [Model Context Protocol](https://modelcontextprotocol.io) server, written in Go, that gives an AI assistant read-only access to [JSONPlaceholder](https://jsonplaceholder.typicode.com): users, posts, comments, albums, photos and todos.
 
 <p align="center">
-  <a href="#what-it-does">What it does</a> · <a href="#install">Install</a> · <a href="#connect-a-client">Connect a client</a> · <a href="#skipping-approval-prompts">Approvals</a> · <a href="#example-prompts">Example prompts</a> · <a href="#tools">Tools</a> · <a href="#reference">Reference</a> · <a href="#configuration">Configuration</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a>
+  <a href="#what-it-does">What it does</a> · <a href="#install">Install</a> · <a href="#connect-a-client">Connect a client</a> · <a href="#skipping-approval-prompts">Approvals</a> · <a href="#example-prompts">Example prompts</a> · <a href="#tools">Tools</a> · <a href="#reference">Reference</a> · <a href="#observability">Observability</a> · <a href="#configuration">Configuration</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a>
 </p>
 
 ## What it does
@@ -63,7 +63,7 @@ For networked or shared use, run the server with the stateless streamable-http t
 ```bash
 MCP_TRANSPORT=streamable-http PORT=8000 jsonplaceholder-mcp-server
 # MCP endpoint:  http://localhost:8000/mcp
-# Probes:        /livez  /readyz  /health
+# Probes:        /livez  /readyz  /health (go-platform httpserver)
 
 claude mcp add --transport http jsonplaceholder http://localhost:8000/mcp
 ```
@@ -215,6 +215,45 @@ Every result ends with an "API Requests:" footer listing the exact URLs it calle
 | `list_todos` with `user_id=2`, `completed=false` | [`GET /todos?userId=2&completed=false`](https://jsonplaceholder.typicode.com/todos?userId=2&completed=false) |
 | `list_photos` with `album_id=1` | [`GET /photos?albumId=1`](https://jsonplaceholder.typicode.com/photos?albumId=1) |
 
+## Observability
+
+The server emits OpenTelemetry traces and Prometheus metrics, built on [go-platform](https://github.com/jedi-knights/go-platform) and [jsonplaceholder-sdk](https://github.com/ocrosby/jsonplaceholder-sdk). It follows sun-mcp's rule that **unset means inert**: with no `OTEL_EXPORTER_OTLP_ENDPOINT` and no `METRICS_PORT`, nothing is installed and nothing is exported.
+
+| Mode | Set | What happens |
+|---|---|---|
+| Inert | neither | No telemetry providers. Spans and metrics are no-ops. |
+| Metrics only | `METRICS_PORT` | Prometheus metrics at `http://HOST:METRICS_PORT/metrics`. No spans are recorded. |
+| Full | `OTEL_EXPORTER_OTLP_ENDPOINT` (plus optionally `METRICS_PORT`) | Traces are exported over OTLP as well. |
+
+Try it locally with the standard OpenTelemetry environment variables:
+
+```bash
+METRICS_PORT=9464 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+MCP_TRANSPORT=streamable-http jsonplaceholder-mcp-server
+curl -s localhost:9464/metrics | grep -E 'mcp_tool|jsonplaceholder_client'
+```
+
+What you get:
+
+| Signal | Name | Notes |
+|---|---|---|
+| Span | `tool.invoke` | One per tool call, with `tool.name`, `action=invoke` and the portfolio's `resource.*` attributes (`resource.path` is `jsonplaceholder-mcp-server/tool/<tool>`). Arguments are never recorded. |
+| Span | `jsonplaceholder.<resource>.<operation>` and `HTTP GET` | From the SDK: one per upstream call, with a child span per attempt and `retry` events. |
+| Span | the service name | One server span per HTTP request, continuing the caller's `traceparent`. The probes are not traced. |
+| Metric | `mcp.tool.invocations` | Counter by `tool.name`, `result` (`ok` or `error`) and `error.type`. |
+| Metric | `mcp.tool.duration` | Histogram, seconds. |
+| Metric | `jsonplaceholder.client.operation_duration`, `jsonplaceholder.client.retries` | From the SDK. |
+| Metric | `http.server.*`, `http.client.*`, `go_*` | Standard HTTP and Go runtime metrics. |
+| Log | stderr, JSON | Every record carries `trace_id` and `span_id` when it is emitted inside a span, and each HTTP response carries an `X-Trace-ID` header. |
+
+Things to know:
+
+- **stdout stays clean under stdio.** It is the JSON-RPC stream, so logs go to stderr, and metrics-only mode records no spans because go-platform's default trace exporter writes to stdout. An end-to-end test runs the real binary in all three modes and checks every stdout line is JSON-RPC.
+- **Metrics-only ignores incoming trace context.** go-platform's sampler is parent-based, so honoring a caller's sampled `traceparent` would force spans to be recorded, and its default exporter would print them to stdout. Metrics-only mode extracts no trace context, so it never records. Configure an OTLP endpoint to have traces continue across services.
+- **Probes.** `/livez`, `/readyz` and `/health` come from go-platform's `httpserver` and return `{"status":"ok"}`. The old aggregate `checks` field is gone.
+- **Graceful shutdown.** On SIGINT or SIGTERM the HTTP server drains in-flight requests, then buffered spans are flushed (5 second limit).
+
 ## Configuration
 
 All variables are optional. See `.env.example`.
@@ -225,7 +264,12 @@ All variables are optional. See `.env.example`.
 | `HOST` / `PORT` | `0.0.0.0` / `8000` | Bind address (streamable-http only) |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR`; logs go to stderr |
 | `API_HOST` | `https://jsonplaceholder.typicode.com` | Upstream base URL |
-| `HTTP_TIMEOUT_SECONDS` | `10` | Per upstream request, 1-120 |
+| `HTTP_TIMEOUT_SECONDS` | `10` | Per upstream attempt, 1-120. The SDK retries transient failures twice, so a call can take up to three attempts |
+| `OTEL_SERVICE_NAME` | `jsonplaceholder-mcp-server` | OpenTelemetry `service.name` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(unset)* | Where to export traces (an http(s) URL). Unset means no trace export |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | `grpc` or `http/protobuf`. With `http/protobuf`, `/v1/traces` is appended to the endpoint, per the OpenTelemetry spec |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | *(unset)* | A complete trace endpoint URL, used as-is. Wins over `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `METRICS_PORT` | *(unset)* | Serve Prometheus metrics at `/metrics` on this port, on a separate listener. Unset means no listener. Must differ from `PORT` over HTTP. The fleet convention is `9464` |
 
 ## Architecture
 

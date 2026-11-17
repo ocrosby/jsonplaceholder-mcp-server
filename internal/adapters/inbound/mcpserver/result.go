@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -42,23 +43,23 @@ func buildResult(prose string, payload any, status *int, rec *requestlog.Recorde
 }
 
 // errorResult maps a domain error to an isError result with sun-mcp's wording.
-func errorResult(err error, rec *requestlog.Recorder) *mcp.CallToolResult {
+func errorResult(ctx context.Context, err error, rec *requestlog.Recorder) *mcp.CallToolResult {
 	de, ok := domain.As(err)
 	if !ok {
-		slog.Error("unexpected error", "err", err)
+		slog.ErrorContext(ctx, "unexpected error", "err", err)
 		msg := "Internal error: " + err.Error()
 		return buildResult(msg, msg, nil, rec)
 	}
 	var msg string
 	switch de.Kind {
 	case domain.KindInvalid:
-		slog.Warn("invalid request", "err", de)
+		slog.WarnContext(ctx, "invalid request", "err", de)
 		msg = "Invalid request: " + de.Message
 	case domain.KindNotFound:
-		slog.Warn("not found", "err", de)
+		slog.WarnContext(ctx, "not found", "err", de)
 		msg = "Not found: " + de.Message
 	default:
-		slog.Error("upstream error", "err", de)
+		slog.ErrorContext(ctx, "upstream error", "err", de)
 		msg = "Upstream error: " + de.Message
 	}
 	var status *int
