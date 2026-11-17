@@ -3,7 +3,7 @@
 A [Model Context Protocol](https://modelcontextprotocol.io) server, written in Go, that gives an AI assistant read-only access to [JSONPlaceholder](https://jsonplaceholder.typicode.com): users, posts, comments, albums, photos and todos.
 
 <p align="center">
-  <a href="#what-it-does">What it does</a> · <a href="#install">Install</a> · <a href="#connect-a-client">Connect a client</a> · <a href="#example-prompts">Example prompts</a> · <a href="#tools">Tools</a> · <a href="#configuration">Configuration</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a>
+  <a href="#what-it-does">What it does</a> · <a href="#install">Install</a> · <a href="#connect-a-client">Connect a client</a> · <a href="#skipping-approval-prompts">Approvals</a> · <a href="#example-prompts">Example prompts</a> · <a href="#tools">Tools</a> · <a href="#configuration">Configuration</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a>
 </p>
 
 ## What it does
@@ -67,6 +67,27 @@ MCP_TRANSPORT=streamable-http PORT=8000 jsonplaceholder-mcp-server
 
 claude mcp add --transport http jsonplaceholder http://localhost:8000/mcp
 ```
+
+## Skipping approval prompts
+
+Clients ask before each tool call by default, so a first session can mean twelve separate prompts. A server cannot approve its own calls; that decision belongs to the client. This server is safe to allow in one step: every tool is read-only (`readOnlyHint`), non-destructive and idempotent, and the only thing it contacts is `jsonplaceholder.typicode.com`, which needs no credentials.
+
+**Claude Code.** Add one rule to your user settings (`~/.claude/settings.json`), using the name you registered the server under (`jsonplaceholder` in the commands above):
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__jsonplaceholder"]
+  }
+}
+```
+
+- **The rule matches the server name, not the tool.** `mcp__jsonplaceholder` allows all 12 tools. If you registered it under another name, use `mcp__<that-name>`.
+- **To allow only some tools**, list them individually: `mcp__jsonplaceholder__list_posts`, `mcp__jsonplaceholder__get_post`, and so on.
+- **A read-only hint does not auto-approve.** Clients may use hints to label a tool, but Claude Code still prompts until a rule allows it.
+- **Put the rule in user settings, not a shared file,** so each person opts in to what their own assistant may run.
+
+**Claude Desktop** has no settings file for this: choose "Always allow" in the permission prompt for each tool.
 
 ## Example prompts
 
