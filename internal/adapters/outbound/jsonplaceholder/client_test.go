@@ -142,3 +142,23 @@ func TestRecordsRequests(t *testing.T) {
 		t.Errorf("entries = %v", e)
 	}
 }
+
+func TestTransientFailureIsRetriedAndEveryAttemptIsRecorded(t *testing.T) {
+	attempts := 0
+	c := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":3}`))
+	})
+	ctx, rec := requestlog.WithRecorder(context.Background())
+	p, err := c.GetPost(ctx, 3)
+	if err != nil || p.ID != 3 {
+		t.Fatalf("expected the retry to succeed: post=%+v err=%v", p, err)
+	}
+	if got := rec.Entries(); len(got) != 2 {
+		t.Errorf("recorded %d requests, want 2 (the failed attempt and the retry): %v", len(got), got)
+	}
+}

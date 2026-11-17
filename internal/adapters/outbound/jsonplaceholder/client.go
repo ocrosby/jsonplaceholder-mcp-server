@@ -1,169 +1,200 @@
 // Package jsonplaceholder is the outbound adapter: it implements
-// ports.ResourceSource over the JSONPlaceholder REST API.
+// ports.ResourceSource by delegating to the jsonplaceholder-sdk client and
+// translating between the SDK's types and errors and the domain's.
 package jsonplaceholder
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"strconv"
+
+	sdk "github.com/ocrosby/jsonplaceholder-sdk"
 
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/domain"
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/ports"
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/requestlog"
 )
 
-// maxBody caps how much of a response is read. With the service's page-size
-// cap no legitimate response approaches this; it bounds a misbehaving upstream.
-const maxBody = 4 << 20
-
-// Client talks to a JSONPlaceholder-compatible API.
-type Client struct {
-	baseURL string
-	http    *http.Client
-}
+// Client adapts the SDK to ports.ResourceSource.
+type Client struct{ sdk *sdk.Client }
 
 var _ ports.ResourceSource = (*Client)(nil)
 
 // New builds a Client. baseURL is e.g. "https://jsonplaceholder.typicode.com"
-// (no trailing slash); hc must not be nil and should carry a timeout.
+// (no trailing slash); hc must not be nil and should carry a timeout, which
+// applies to each attempt the SDK makes.
 func New(baseURL string, hc *http.Client) (*Client, error) {
-	if baseURL == "" {
-		return nil, errors.New("jsonplaceholder: base URL is required")
+	c, err := sdk.NewClient(
+		sdk.WithBaseURL(baseURL),
+		sdk.WithHTTPClient(hc),
+		// Every attempt, retries included, lands in the tool result's "API Requests:" footer.
+		sdk.WithRequestHook(func(ctx context.Context, method, url string) {
+			requestlog.Record(ctx, method+" "+url)
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("jsonplaceholder: %w", err)
 	}
-	if hc == nil {
-		return nil, errors.New("jsonplaceholder: http client is required")
-	}
-	return &Client{baseURL: baseURL, http: hc}, nil
+	return &Client{sdk: c}, nil
 }
 
-// fetch GETs path (with query) and decodes the JSON body into T.
-// what names the target for error messages, e.g. "post 7".
-func fetch[T any](ctx context.Context, c *Client, path string, q url.Values, what string) (T, error) {
-	var zero T
-	target := c.baseURL + path
-	if len(q) > 0 {
-		target += "?" + q.Encode()
-	}
-	requestlog.Record(ctx, "GET "+target)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return zero, domain.Upstream(0, "building request for %s: %v", what, err)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return zero, domain.Upstream(0, "requesting %s: %v", what, err)
-	}
-	defer func() { _ = resp.Body.Close() }() // read-only body; a close error has no consequence
-
+// mapErr translates an SDK error into the domain error the application speaks.
+// what names the target for messages, e.g. "post 7".
+func mapErr(err error, what string) error {
+	var apiErr *sdk.APIError
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return zero, domain.NotFound("%s not found", what)
-	case resp.StatusCode != http.StatusOK:
-		return zero, domain.Upstream(resp.StatusCode, "%s: upstream returned HTTP %d", what, resp.StatusCode)
-	}
-
-	var out T
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&out); err != nil {
+	case errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound:
+		return domain.NotFound("%s not found", what)
+	case errors.As(err, &apiErr):
+		return domain.Upstream(apiErr.StatusCode, "%s: upstream returned HTTP %d", what, apiErr.StatusCode)
+	case errors.Is(err, sdk.ErrInvalidArgument):
+		return domain.Invalid("%s: %v", what, err)
+	case errors.Is(err, sdk.ErrInvalidResponse):
 		// 502: the upstream answered 200 but not with usable JSON.
-		return zero, domain.Upstream(http.StatusBadGateway, "%s: undecodable upstream response: %v", what, err)
-	}
-	return out, nil
-}
-
-func listQuery(o domain.ListOptions) url.Values {
-	q := url.Values{}
-	q.Set("_page", strconv.Itoa(o.Page))
-	q.Set("_limit", strconv.Itoa(o.Limit))
-	return q
-}
-
-func setID(q url.Values, key string, id *int) {
-	if id != nil {
-		q.Set(key, strconv.Itoa(*id))
+		return domain.Upstream(http.StatusBadGateway, "%s: undecodable upstream response: %v", what, err)
+	default:
+		return domain.Upstream(0, "requesting %s: %v", what, err)
 	}
 }
 
-func one[T any](ctx context.Context, c *Client, collection, noun string, id int) (T, error) {
-	return fetch[T](ctx, c, "/"+collection+"/"+strconv.Itoa(id), nil, fmt.Sprintf("%s %d", noun, id))
+// opts converts the domain's paging options.
+func opts(o domain.ListOptions) sdk.ListOptions {
+	return sdk.ListOptions{Page: o.Page, Limit: o.Limit}
+}
+
+// convert maps a slice element by element.
+func convert[S, D any](in []S, f func(S) D) []D {
+	out := make([]D, len(in))
+	for i, v := range in {
+		out[i] = f(v)
+	}
+	return out
+}
+
+// The SDK and domain entities have identical fields, so Go struct conversion
+// applies; User nests types, which need explicit mapping.
+func toPost(p sdk.Post) domain.Post          { return domain.Post(p) }
+func toComment(c sdk.Comment) domain.Comment { return domain.Comment(c) }
+func toAlbum(a sdk.Album) domain.Album       { return domain.Album(a) }
+func toPhoto(p sdk.Photo) domain.Photo       { return domain.Photo(p) }
+func toTodo(t sdk.Todo) domain.Todo          { return domain.Todo(t) }
+
+func toUser(u sdk.User) domain.User {
+	return domain.User{
+		ID: u.ID, Name: u.Name, Username: u.Username, Email: u.Email, Phone: u.Phone, Website: u.Website,
+		Address: domain.Address{
+			Street: u.Address.Street, Suite: u.Address.Suite, City: u.Address.City, Zipcode: u.Address.Zipcode,
+			Geo: domain.Geo{Lat: u.Address.Geo.Lat, Lng: u.Address.Geo.Lng},
+		},
+		Company: domain.Company{Name: u.Company.Name, CatchPhrase: u.Company.CatchPhrase, BS: u.Company.BS},
+	}
 }
 
 // ListPosts implements ports.ResourceSource.
 func (c *Client) ListPosts(ctx context.Context, f domain.PostFilter, o domain.ListOptions) ([]domain.Post, error) {
-	q := listQuery(o)
-	setID(q, "userId", f.UserID)
-	return fetch[[]domain.Post](ctx, c, "/posts", q, "posts")
+	page, err := c.sdk.Posts.List(ctx, sdk.PostListParams{UserID: f.UserID, ListOptions: opts(o)})
+	if err != nil {
+		return nil, mapErr(err, "posts")
+	}
+	return convert(page.Items, toPost), nil
 }
 
 // GetPost implements ports.ResourceSource.
 func (c *Client) GetPost(ctx context.Context, id int) (domain.Post, error) {
-	return one[domain.Post](ctx, c, "posts", "post", id)
+	p, err := c.sdk.Posts.Get(ctx, id)
+	if err != nil {
+		return domain.Post{}, mapErr(err, fmt.Sprintf("post %d", id))
+	}
+	return toPost(*p), nil
 }
 
 // ListComments implements ports.ResourceSource.
 func (c *Client) ListComments(ctx context.Context, f domain.CommentFilter, o domain.ListOptions) ([]domain.Comment, error) {
-	q := listQuery(o)
-	setID(q, "postId", f.PostID)
-	return fetch[[]domain.Comment](ctx, c, "/comments", q, "comments")
+	page, err := c.sdk.Comments.List(ctx, sdk.CommentListParams{PostID: f.PostID, ListOptions: opts(o)})
+	if err != nil {
+		return nil, mapErr(err, "comments")
+	}
+	return convert(page.Items, toComment), nil
 }
 
 // GetComment implements ports.ResourceSource.
 func (c *Client) GetComment(ctx context.Context, id int) (domain.Comment, error) {
-	return one[domain.Comment](ctx, c, "comments", "comment", id)
+	v, err := c.sdk.Comments.Get(ctx, id)
+	if err != nil {
+		return domain.Comment{}, mapErr(err, fmt.Sprintf("comment %d", id))
+	}
+	return toComment(*v), nil
 }
 
 // ListAlbums implements ports.ResourceSource.
 func (c *Client) ListAlbums(ctx context.Context, f domain.AlbumFilter, o domain.ListOptions) ([]domain.Album, error) {
-	q := listQuery(o)
-	setID(q, "userId", f.UserID)
-	return fetch[[]domain.Album](ctx, c, "/albums", q, "albums")
+	page, err := c.sdk.Albums.List(ctx, sdk.AlbumListParams{UserID: f.UserID, ListOptions: opts(o)})
+	if err != nil {
+		return nil, mapErr(err, "albums")
+	}
+	return convert(page.Items, toAlbum), nil
 }
 
 // GetAlbum implements ports.ResourceSource.
 func (c *Client) GetAlbum(ctx context.Context, id int) (domain.Album, error) {
-	return one[domain.Album](ctx, c, "albums", "album", id)
+	v, err := c.sdk.Albums.Get(ctx, id)
+	if err != nil {
+		return domain.Album{}, mapErr(err, fmt.Sprintf("album %d", id))
+	}
+	return toAlbum(*v), nil
 }
 
 // ListPhotos implements ports.ResourceSource.
 func (c *Client) ListPhotos(ctx context.Context, f domain.PhotoFilter, o domain.ListOptions) ([]domain.Photo, error) {
-	q := listQuery(o)
-	setID(q, "albumId", f.AlbumID)
-	return fetch[[]domain.Photo](ctx, c, "/photos", q, "photos")
+	page, err := c.sdk.Photos.List(ctx, sdk.PhotoListParams{AlbumID: f.AlbumID, ListOptions: opts(o)})
+	if err != nil {
+		return nil, mapErr(err, "photos")
+	}
+	return convert(page.Items, toPhoto), nil
 }
 
 // GetPhoto implements ports.ResourceSource.
 func (c *Client) GetPhoto(ctx context.Context, id int) (domain.Photo, error) {
-	return one[domain.Photo](ctx, c, "photos", "photo", id)
+	v, err := c.sdk.Photos.Get(ctx, id)
+	if err != nil {
+		return domain.Photo{}, mapErr(err, fmt.Sprintf("photo %d", id))
+	}
+	return toPhoto(*v), nil
 }
 
 // ListTodos implements ports.ResourceSource.
 func (c *Client) ListTodos(ctx context.Context, f domain.TodoFilter, o domain.ListOptions) ([]domain.Todo, error) {
-	q := listQuery(o)
-	setID(q, "userId", f.UserID)
-	if f.Completed != nil {
-		q.Set("completed", strconv.FormatBool(*f.Completed))
+	page, err := c.sdk.Todos.List(ctx, sdk.TodoListParams{UserID: f.UserID, Completed: f.Completed, ListOptions: opts(o)})
+	if err != nil {
+		return nil, mapErr(err, "todos")
 	}
-	return fetch[[]domain.Todo](ctx, c, "/todos", q, "todos")
+	return convert(page.Items, toTodo), nil
 }
 
 // GetTodo implements ports.ResourceSource.
 func (c *Client) GetTodo(ctx context.Context, id int) (domain.Todo, error) {
-	return one[domain.Todo](ctx, c, "todos", "todo", id)
+	v, err := c.sdk.Todos.Get(ctx, id)
+	if err != nil {
+		return domain.Todo{}, mapErr(err, fmt.Sprintf("todo %d", id))
+	}
+	return toTodo(*v), nil
 }
 
 // ListUsers implements ports.ResourceSource.
 func (c *Client) ListUsers(ctx context.Context, o domain.ListOptions) ([]domain.User, error) {
-	return fetch[[]domain.User](ctx, c, "/users", listQuery(o), "users")
+	page, err := c.sdk.Users.List(ctx, opts(o))
+	if err != nil {
+		return nil, mapErr(err, "users")
+	}
+	return convert(page.Items, toUser), nil
 }
 
 // GetUser implements ports.ResourceSource.
 func (c *Client) GetUser(ctx context.Context, id int) (domain.User, error) {
-	return one[domain.User](ctx, c, "users", "user", id)
+	v, err := c.sdk.Users.Get(ctx, id)
+	if err != nil {
+		return domain.User{}, mapErr(err, fmt.Sprintf("user %d", id))
+	}
+	return toUser(*v), nil
 }

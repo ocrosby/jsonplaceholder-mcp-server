@@ -7,7 +7,7 @@ Go MCP server exposing read-only tools over jsonplaceholder.typicode.com. Mirror
 - `internal/domain`: entities, filters, `*domain.Error` (Invalid / NotFound / Upstream). Stdlib only.
 - `internal/ports`: `ResourceSource` (outbound) and `ResourceService` (inbound).
 - `internal/application`: input validation and the page-size cap; the only place rules live.
-- `internal/adapters/outbound/jsonplaceholder`: HTTP client. Records each request via `internal/requestlog`.
+- `internal/adapters/outbound/jsonplaceholder`: adapter over [jsonplaceholder-sdk](https://github.com/ocrosby/jsonplaceholder-sdk). Maps SDK types and errors to domain ones; the SDK's request hook records every attempt (retries included) via `internal/requestlog`. Retries, backoff and HTTP live in the SDK, not here.
 - `internal/adapters/inbound/mcpserver`: tools, result shaping, health probes, HTTP handler.
 - `cmd/jsonplaceholder-mcp-server`: composition root only.
 

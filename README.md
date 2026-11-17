@@ -229,7 +229,7 @@ All variables are optional. See `.env.example`.
 
 ## Architecture
 
-Hexagonal: the domain and application layers know nothing about MCP or HTTP.
+Hexagonal: the domain and application layers know nothing about MCP or HTTP. The outbound adapter is a thin translation layer over [jsonplaceholder-sdk](https://github.com/ocrosby/jsonplaceholder-sdk), which owns the HTTP, retries and paging.
 
 ```
 cmd/jsonplaceholder-mcp-server   composition root
@@ -237,7 +237,7 @@ internal/domain                  entities, filters, errors
 internal/ports                   ResourceSource (out), ResourceService (in)
 internal/application             validation, page-size cap
 internal/adapters/inbound/mcpserver        MCP tools, result shape, probes
-internal/adapters/outbound/jsonplaceholder HTTP client
+internal/adapters/outbound/jsonplaceholder adapter over jsonplaceholder-sdk
 ```
 
 ## Development
