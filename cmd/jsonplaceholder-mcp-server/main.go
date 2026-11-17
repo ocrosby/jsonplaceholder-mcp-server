@@ -4,15 +4,10 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
-	"os/signal"
-	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -20,11 +15,13 @@ import (
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/adapters/inbound/mcpserver"
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/adapters/outbound/jsonplaceholder"
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/application"
+	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/bootstrap"
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/config"
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/version"
 )
 
-const shutdownGrace = 5 * time.Second
+// telemetryFlushTimeout bounds how long shutdown waits to flush buffered spans.
+const telemetryFlushTimeout = 5 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -39,7 +36,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel})))
+	ctx := context.Background()
+
+	// Telemetry first: the SDK and the MCP adapter pick the providers up from
+	// the globals when they are built.
+	rt, err := bootstrap.Setup(ctx, cfg, version.Version)
+	if err != nil {
+		return err
+	}
+	defer flushTelemetry(rt)
 
 	source, err := jsonplaceholder.New(cfg.APIHost, &http.Client{Timeout: cfg.HTTPTimeout})
 	if err != nil {
@@ -54,35 +59,20 @@ func run() error {
 		return err
 	}
 
-	slog.Info("starting", "version", version.Version, "transport", cfg.Transport, "api_host", cfg.APIHost)
+	slog.Info("starting", "version", version.Version, "transport", cfg.Transport, "api_host", cfg.APIHost,
+		"telemetry", rt.Mode.String(), "metrics_port", cfg.MetricsPort)
 	if cfg.Transport == config.Stdio {
 		return server.ServeStdio(mcpSrv)
 	}
-	return serveHTTP(cfg, mcpserver.NewHTTPHandler(mcpSrv, config.EndpointPath))
+	handler := bootstrap.WrapHTTP(mcpserver.NewHTTPHandler(mcpSrv, config.EndpointPath), rt)
+	return bootstrap.ServeHTTP(ctx, cfg, handler)
 }
 
-func serveHTTP(cfg config.Config, handler http.Handler) error {
-	srv := &http.Server{
-		Addr:              net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
-		Handler:           handler,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
-	slog.Info("listening", "addr", srv.Addr, "endpoint", config.EndpointPath)
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-	}
-	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+// flushTelemetry flushes buffered spans and stops the metrics listener.
+func flushTelemetry(rt *bootstrap.Runtime) {
+	ctx, cancel := context.WithTimeout(context.Background(), telemetryFlushTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("shutdown: %w", err)
+	if err := rt.Shutdown(ctx); err != nil {
+		slog.Error("telemetry shutdown", "err", err)
 	}
-	return nil
 }

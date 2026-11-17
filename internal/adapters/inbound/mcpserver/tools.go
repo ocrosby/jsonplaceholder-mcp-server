@@ -98,7 +98,7 @@ func call[T any](fn func(ctx context.Context, req mcp.CallToolRequest) (T, error
 		ctx, rec := requestlog.WithRecorder(ctx)
 		v, err := fn(ctx, req)
 		if err != nil {
-			return errorResult(err, rec), nil
+			return errorResult(ctx, err, rec), nil
 		}
 		return okResult(format(v), v, rec), nil
 	}

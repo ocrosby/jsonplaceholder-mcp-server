@@ -162,3 +162,70 @@ func TestTransientFailureIsRetriedAndEveryAttemptIsRecorded(t *testing.T) {
 		t.Errorf("recorded %d requests, want 2 (the failed attempt and the retry): %v", len(got), got)
 	}
 }
+
+// TestEveryOperationMapsSDKTypesToDomainTypes drives all twelve operations
+// against canned JSON and checks each field survives the SDK-to-domain
+// translation, including the nested user.
+func TestEveryOperationMapsSDKTypesToDomainTypes(t *testing.T) {
+	fixtures := map[string]string{
+		"/users":      `[{"id":1,"name":"Leanne","username":"Bret","email":"e@x","phone":"p","website":"w","address":{"street":"s","suite":"u","city":"c","zipcode":"z","geo":{"lat":"1.5","lng":"2.5"}},"company":{"name":"Co","catchPhrase":"cp","bs":"b"}}]`,
+		"/users/1":    `{"id":1,"name":"Leanne","username":"Bret","email":"e@x","phone":"p","website":"w","address":{"street":"s","suite":"u","city":"c","zipcode":"z","geo":{"lat":"1.5","lng":"2.5"}},"company":{"name":"Co","catchPhrase":"cp","bs":"b"}}`,
+		"/posts":      `[{"userId":2,"id":3,"title":"t","body":"b"}]`,
+		"/posts/3":    `{"userId":2,"id":3,"title":"t","body":"b"}`,
+		"/comments":   `[{"postId":3,"id":4,"name":"n","email":"e","body":"b"}]`,
+		"/comments/4": `{"postId":3,"id":4,"name":"n","email":"e","body":"b"}`,
+		"/albums":     `[{"userId":2,"id":5,"title":"t"}]`,
+		"/albums/5":   `{"userId":2,"id":5,"title":"t"}`,
+		"/photos":     `[{"albumId":5,"id":6,"title":"t","url":"u","thumbnailUrl":"th"}]`,
+		"/photos/6":   `{"albumId":5,"id":6,"title":"t","url":"u","thumbnailUrl":"th"}`,
+		"/todos":      `[{"userId":2,"id":7,"title":"t","completed":true}]`,
+		"/todos/7":    `{"userId":2,"id":7,"title":"t","completed":true}`,
+	}
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, ok := fixtures[r.URL.Path]
+		if !ok {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(body))
+	})
+	ctx, o := context.Background(), domain.ListOptions{Page: 1, Limit: 5}
+
+	users, err := c.ListUsers(ctx, o)
+	u := users[0]
+	if err != nil || u.ID != 1 || u.Username != "Bret" || u.Address.City != "c" || u.Address.Geo.Lng != "2.5" || u.Company.BS != "b" || u.Company.CatchPhrase != "cp" {
+		t.Errorf("ListUsers: %+v (%v)", users, err)
+	}
+	if one, err := c.GetUser(ctx, 1); err != nil || one != u {
+		t.Errorf("GetUser: %+v (%v), want %+v", one, err, u)
+	}
+	if v, err := c.ListPosts(ctx, domain.PostFilter{}, o); err != nil || v[0] != (domain.Post{UserID: 2, ID: 3, Title: "t", Body: "b"}) {
+		t.Errorf("ListPosts: %+v (%v)", v, err)
+	}
+	if v, err := c.GetPost(ctx, 3); err != nil || v.UserID != 2 || v.Body != "b" {
+		t.Errorf("GetPost: %+v (%v)", v, err)
+	}
+	if v, err := c.ListComments(ctx, domain.CommentFilter{}, o); err != nil || v[0] != (domain.Comment{PostID: 3, ID: 4, Name: "n", Email: "e", Body: "b"}) {
+		t.Errorf("ListComments: %+v (%v)", v, err)
+	}
+	if v, err := c.GetComment(ctx, 4); err != nil || v.PostID != 3 || v.Email != "e" {
+		t.Errorf("GetComment: %+v (%v)", v, err)
+	}
+	if v, err := c.ListAlbums(ctx, domain.AlbumFilter{}, o); err != nil || v[0] != (domain.Album{UserID: 2, ID: 5, Title: "t"}) {
+		t.Errorf("ListAlbums: %+v (%v)", v, err)
+	}
+	if v, err := c.GetAlbum(ctx, 5); err != nil || v.UserID != 2 {
+		t.Errorf("GetAlbum: %+v (%v)", v, err)
+	}
+	if v, err := c.ListPhotos(ctx, domain.PhotoFilter{}, o); err != nil || v[0] != (domain.Photo{AlbumID: 5, ID: 6, Title: "t", URL: "u", ThumbnailURL: "th"}) {
+		t.Errorf("ListPhotos: %+v (%v)", v, err)
+	}
+	if v, err := c.GetPhoto(ctx, 6); err != nil || v.ThumbnailURL != "th" {
+		t.Errorf("GetPhoto: %+v (%v)", v, err)
+	}
+	if v, err := c.ListTodos(ctx, domain.TodoFilter{}, o); err != nil || v[0] != (domain.Todo{UserID: 2, ID: 7, Title: "t", Completed: true}) {
+		t.Errorf("ListTodos: %+v (%v)", v, err)
+	}
+	if v, err := c.GetTodo(ctx, 7); err != nil || !v.Completed {
+		t.Errorf("GetTodo: %+v (%v)", v, err)
+	}
+}
