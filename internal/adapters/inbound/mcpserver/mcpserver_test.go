@@ -239,3 +239,36 @@ func TestHTTPTransportIsStatelessAndServesProbes(t *testing.T) {
 		t.Errorf("tools/list over HTTP -> %d %s", resp.StatusCode, body)
 	}
 }
+
+func TestEveryToolCarriesDiscoveryMeta(t *testing.T) {
+	c := newClient(t, &fakeSource{})
+	out, err := c.ListTools(context.Background(), mcp.ListToolsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range out.Tools {
+		if tl.Meta == nil {
+			t.Errorf("tool %q has no _meta", tl.Name)
+			continue
+		}
+		m, ok := tl.Meta.AdditionalFields[mcpserver.MetaKey].(map[string]any)
+		if !ok {
+			t.Errorf("tool %q: _meta[%q] = %#v", tl.Name, mcpserver.MetaKey, tl.Meta.AdditionalFields)
+			continue
+		}
+		op, _ := m["operation"].(string)
+		resource, _ := m["resource"].(string)
+		if op != "list" && op != "get" {
+			t.Errorf("tool %q: operation = %q", tl.Name, op)
+		}
+		if !strings.HasPrefix(tl.Name, op+"_") {
+			t.Errorf("tool %q does not match its operation %q", tl.Name, op)
+		}
+		if paged, _ := m["paged"].(bool); paged != (op == "list") {
+			t.Errorf("tool %q: paged = %v for operation %q", tl.Name, paged, op)
+		}
+		if !strings.Contains(strings.ToLower(tl.Description), strings.TrimSuffix(resource, "s")) {
+			t.Errorf("tool %q: description never mentions %q", tl.Name, resource)
+		}
+	}
+}
