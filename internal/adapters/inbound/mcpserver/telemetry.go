@@ -41,6 +41,7 @@ type Option func(*options)
 type options struct {
 	tracerProvider trace.TracerProvider
 	meterProvider  metric.MeterProvider
+	compact        bool
 }
 
 // WithTracerProvider sets the TracerProvider tool spans are created with. The
@@ -54,6 +55,14 @@ func WithTracerProvider(tp trace.TracerProvider) Option {
 // default is the global provider.
 func WithMeterProvider(mp metric.MeterProvider) Option {
 	return func(o *options) { o.meterProvider = mp }
+}
+
+// WithCompactResults drops the raw payload from structuredContent when on. The
+// prose already carries the same data, so every result is roughly half the size
+// for a client that feeds structuredContent to a model. Off by default: the
+// default shape matches sun-mcp.
+func WithCompactResults(on bool) Option {
+	return func(o *options) { o.compact = on }
 }
 
 // toolTelemetry instruments every tool call at the adapter boundary, as the

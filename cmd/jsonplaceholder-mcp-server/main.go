@@ -54,7 +54,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	mcpSrv, err := mcpserver.New(svc, version.Version)
+	mcpSrv, err := mcpserver.New(svc, version.Version, mcpserver.WithCompactResults(cfg.CompactResults))
 	if err != nil {
 		return err
 	}

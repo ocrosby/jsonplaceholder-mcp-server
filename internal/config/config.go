@@ -37,6 +37,8 @@ type Config struct {
 	LogLevel    slog.Level
 	APIHost     string // upstream base URL, no trailing slash
 	HTTPTimeout time.Duration
+	// CompactResults drops the raw payload from structured tool results (COMPACT_RESULTS).
+	CompactResults bool
 
 	// ServiceName is the OpenTelemetry service.name.
 	ServiceName string
@@ -63,7 +65,7 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	cfg := Config{Host: get("HOST", "0.0.0.0")}
 	// Order matters: telemetry validation needs the transport and port.
-	steps := []func(*Config, getter) error{applyTransport, applyPort, applyLogLevel, applyUpstream, applyTelemetry}
+	steps := []func(*Config, getter) error{applyTransport, applyPort, applyLogLevel, applyUpstream, applyOutput, applyTelemetry}
 	for _, step := range steps {
 		if err := step(&cfg, get); err != nil {
 			return Config{}, err
@@ -105,6 +107,15 @@ func applyUpstream(cfg *Config, get getter) error {
 	secs, err := parseRange("HTTP_TIMEOUT_SECONDS", get("HTTP_TIMEOUT_SECONDS", "10"), 1, 120)
 	cfg.HTTPTimeout = time.Duration(secs) * time.Second
 	return err
+}
+
+func applyOutput(cfg *Config, get getter) error {
+	v, err := strconv.ParseBool(get("COMPACT_RESULTS", "false"))
+	if err != nil {
+		return fmt.Errorf("config: COMPACT_RESULTS must be a boolean: %w", err)
+	}
+	cfg.CompactResults = v
+	return nil
 }
 
 // applyTelemetry reads the observability settings. All three are optional and,
