@@ -3,12 +3,12 @@
 A [Model Context Protocol](https://modelcontextprotocol.io) server, written in Go, that gives an AI assistant read-only access to [JSONPlaceholder](https://jsonplaceholder.typicode.com): users, posts, comments, albums, photos and todos.
 
 <p align="center">
-  <a href="#what-it-does">What it does</a> · <a href="#install">Install</a> · <a href="#connect-a-client">Connect a client</a> · <a href="#skipping-approval-prompts">Approvals</a> · <a href="#example-prompts">Example prompts</a> · <a href="#tools">Tools</a> · <a href="#configuration">Configuration</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a>
+  <a href="#what-it-does">What it does</a> · <a href="#install">Install</a> · <a href="#connect-a-client">Connect a client</a> · <a href="#skipping-approval-prompts">Approvals</a> · <a href="#example-prompts">Example prompts</a> · <a href="#tools">Tools</a> · <a href="#reference">Reference</a> · <a href="#configuration">Configuration</a> · <a href="#architecture">Architecture</a> · <a href="#development">Development</a>
 </p>
 
 ## What it does
 
-Once connected, your assistant can look up JSONPlaceholder's fake REST data by calling tools instead of guessing or you pasting JSON. It is useful as a safe, no-credentials MCP server for learning MCP, demoing tool use, or testing a client. The data is static test data, not real people or content.
+Once connected, your assistant can look up JSONPlaceholder's fake REST data by calling tools instead of guessing or you pasting JSON. It is useful as a safe, no-credentials MCP server for learning MCP, demoing tool use, or testing a client. The data is static test data, not real people or content. See the [JSONPlaceholder guide](https://jsonplaceholder.typicode.com/guide/) and the [Reference](#reference) links to explore it.
 
 See [Example prompts](#example-prompts) for things to ask.
 
@@ -172,18 +172,48 @@ Failures come back as results the assistant can read and explain, not as protoco
 
 All tools are read-only. JSONPlaceholder fakes writes and persists nothing, so there are no create, update or delete tools.
 
-| Resource | List | Get one | Filters on list |
-|---|---|---|---|
-| Users | `list_users` | `get_user` | |
-| Posts | `list_posts` | `get_post` | `user_id` |
-| Comments | `list_comments` | `get_comment` | `post_id` |
-| Albums | `list_albums` | `get_album` | `user_id` |
-| Photos | `list_photos` | `get_photo` | `album_id` |
-| Todos | `list_todos` | `get_todo` | `user_id`, `completed` |
+Click a resource name to open its live data on JSONPlaceholder.
+
+| Resource | Records | List | Get one | Filters on list |
+|---|---|---|---|---|
+| [Users](https://jsonplaceholder.typicode.com/users) | 10 | `list_users` | `get_user` | |
+| [Posts](https://jsonplaceholder.typicode.com/posts) | 100 | `list_posts` | `get_post` | `user_id` |
+| [Comments](https://jsonplaceholder.typicode.com/comments) | 500 | `list_comments` | `get_comment` | `post_id` |
+| [Albums](https://jsonplaceholder.typicode.com/albums) | 100 | `list_albums` | `get_album` | `user_id` |
+| [Photos](https://jsonplaceholder.typicode.com/photos) | 5000 | `list_photos` | `get_photo` | `album_id` |
+| [Todos](https://jsonplaceholder.typicode.com/todos) | 200 | `list_todos` | `get_todo` | `user_id`, `completed` |
 
 Every list tool takes `page` (default 1) and `limit` (default 20, maximum 100). The upstream nested routes (`/posts/1/comments`) are covered by the filters, not separate tools.
 
 Every result follows sun-mcp's shape: `content` is readable prose with an "API Requests:" footer, and `structuredContent` is `{"result": {"prose", "payload", "status_code"}, "api_requests": [...]}`. Failures (invalid input, not found, upstream error) are results with `isError: true`, not protocol errors.
+
+## Reference
+
+Use these to see what the data looks like, before or while you ask for it.
+
+**JSONPlaceholder**
+
+- [jsonplaceholder.typicode.com](https://jsonplaceholder.typicode.com/): the home page, with the resource list and live examples.
+- [Guide](https://jsonplaceholder.typicode.com/guide/): how the upstream API works, including routes, filtering, nested resources and paging.
+- Browse the data: [users](https://jsonplaceholder.typicode.com/users), [posts](https://jsonplaceholder.typicode.com/posts), [comments](https://jsonplaceholder.typicode.com/comments), [albums](https://jsonplaceholder.typicode.com/albums), [photos](https://jsonplaceholder.typicode.com/photos), [todos](https://jsonplaceholder.typicode.com/todos).
+- [typicode/jsonplaceholder](https://github.com/typicode/jsonplaceholder) is its source, and [typicode/json-server](https://github.com/typicode/json-server) is the server it is built on (it defines the `_page` and `_limit` paging this server uses).
+
+**Model Context Protocol**
+
+- [modelcontextprotocol.io](https://modelcontextprotocol.io): the protocol documentation.
+- [Tools specification](https://modelcontextprotocol.io/specification/latest/server/tools): how tools, annotations and results are defined.
+
+**How a tool call maps to an upstream request**
+
+Every result ends with an "API Requests:" footer listing the exact URLs it called, so you can paste one into a browser and compare.
+
+| Tool call | Upstream request |
+|---|---|
+| `list_posts` with `user_id=1`, `page=2`, `limit=5` | [`GET /posts?userId=1&_page=2&_limit=5`](https://jsonplaceholder.typicode.com/posts?userId=1&_page=2&_limit=5) |
+| `get_post` with `id=1` | [`GET /posts/1`](https://jsonplaceholder.typicode.com/posts/1) |
+| `list_comments` with `post_id=1` | [`GET /comments?postId=1`](https://jsonplaceholder.typicode.com/comments?postId=1) (the same data as [`/posts/1/comments`](https://jsonplaceholder.typicode.com/posts/1/comments)) |
+| `list_todos` with `user_id=2`, `completed=false` | [`GET /todos?userId=2&completed=false`](https://jsonplaceholder.typicode.com/todos?userId=2&completed=false) |
+| `list_photos` with `album_id=1` | [`GET /photos?albumId=1`](https://jsonplaceholder.typicode.com/photos?albumId=1) |
 
 ## Configuration
 
