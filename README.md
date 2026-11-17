@@ -264,6 +264,7 @@ All variables are optional. See `.env.example`.
 | `HOST` / `PORT` | `0.0.0.0` / `8000` | Bind address (streamable-http only) |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR`; logs go to stderr |
 | `API_HOST` | `https://jsonplaceholder.typicode.com` | Upstream base URL |
+| `COMPACT_RESULTS` | `false` | `true` drops the raw `payload` from `structuredContent`, roughly halving each result; prose, `status_code` and `api_requests` stay |
 | `HTTP_TIMEOUT_SECONDS` | `10` | Per upstream attempt, 1-120. The SDK retries transient failures twice, so a call can take up to three attempts |
 | `OTEL_SERVICE_NAME` | `jsonplaceholder-mcp-server` | OpenTelemetry `service.name` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(unset)* | Where to export traces (an http(s) URL). Unset means no trace export |

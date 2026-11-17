@@ -46,11 +46,16 @@ func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
 
 func newClient(t *testing.T, src *fakeSource) *client.Client {
 	t.Helper()
+	return newClientWith(t, src)
+}
+
+func newClientWith(t *testing.T, src *fakeSource, opts ...mcpserver.Option) *client.Client {
+	t.Helper()
 	svc, err := application.NewService(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := mcpserver.New(svc, "test")
+	srv, err := mcpserver.New(svc, "test", opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,5 +275,37 @@ func TestEveryToolCarriesDiscoveryMeta(t *testing.T) {
 		if !strings.Contains(strings.ToLower(tl.Description), strings.TrimSuffix(resource, "s")) {
 			t.Errorf("tool %q: description never mentions %q", tl.Name, resource)
 		}
+	}
+}
+
+// Compact mode drops the raw payload from structuredContent: the prose already
+// carries the same data, and sending both roughly doubles every result.
+func TestCompactResultsDropThePayloadOnly(t *testing.T) {
+	full := callTool(t, newClient(t, &fakeSource{}), "get_post", map[string]any{"id": 1})
+	res := callTool(t, newClientWith(t, &fakeSource{}, mcpserver.WithCompactResults(true)), "get_post", map[string]any{"id": 1})
+	if res.IsError {
+		t.Fatalf("isError: %s", text(res))
+	}
+	result, reqs := structured(t, res)
+	if _, has := result["payload"]; has {
+		t.Errorf("compact result still carries payload: %#v", result)
+	}
+	fullResult, _ := structured(t, full)
+	if result["prose"] != fullResult["prose"] || result["status_code"] != float64(200) || len(reqs) != 1 {
+		t.Errorf("compact result lost prose, status or api_requests: %#v %v", result, reqs)
+	}
+	if text(res) != text(full) {
+		t.Errorf("content differs from the full result: %q vs %q", text(res), text(full))
+	}
+}
+
+func TestCompactFailuresStayIsErrorWithStatus(t *testing.T) {
+	c := newClientWith(t, &fakeSource{}, mcpserver.WithCompactResults(true))
+	res := callTool(t, c, "get_post", map[string]any{"id": 0})
+	if !res.IsError {
+		t.Fatalf("expected isError, got %q", text(res))
+	}
+	if result, _ := structured(t, res); result["prose"] == "" {
+		t.Errorf("failure lost its prose: %#v", result)
 	}
 }

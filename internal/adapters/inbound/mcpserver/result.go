@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/domain"
 	"github.com/ocrosby/jsonplaceholder-mcp-server/internal/requestlog"
@@ -73,4 +74,22 @@ func errorResult(ctx context.Context, err error, rec *requestlog.Recorder) *mcp.
 func okResult(prose string, payload any, rec *requestlog.Recorder) *mcp.CallToolResult {
 	s := httpOK
 	return buildResult(prose, payload, &s, rec)
+}
+
+// compactMiddleware removes the raw payload from structuredContent, keeping
+// prose, status_code and api_requests. buildResult makes a fresh map per call,
+// so deleting in place cannot leak into another result.
+func compactMiddleware(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		res, err := next(ctx, req)
+		if res == nil { // a handler error carries no result to compact
+			return res, err
+		}
+		if m, ok := res.StructuredContent.(map[string]any); ok {
+			if r, ok := m["result"].(map[string]any); ok {
+				delete(r, "payload")
+			}
+		}
+		return res, err
+	}
 }

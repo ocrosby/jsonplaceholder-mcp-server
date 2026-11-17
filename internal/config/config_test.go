@@ -127,3 +127,15 @@ func TestInvalid(t *testing.T) {
 		t.Error("nil getenv must error")
 	}
 }
+
+func TestCompactResults(t *testing.T) {
+	for in, want := range map[string]bool{"": false, "false": false, "true": true, "1": true} {
+		cfg, err := config.Load(env(map[string]string{"COMPACT_RESULTS": in}))
+		if err != nil || cfg.CompactResults != want {
+			t.Errorf("COMPACT_RESULTS=%q: got %v, %v; want %v", in, cfg.CompactResults, err, want)
+		}
+	}
+	if _, err := config.Load(env(map[string]string{"COMPACT_RESULTS": "maybe"})); err == nil {
+		t.Error("COMPACT_RESULTS=maybe: expected error")
+	}
+}

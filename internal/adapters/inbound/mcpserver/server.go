@@ -32,11 +32,16 @@ func New(svc ports.ResourceService, version string, opts ...Option) (*server.MCP
 	if err != nil {
 		return nil, err
 	}
-	s := server.NewMCPServer(ServerName, version,
+	srvOpts := []server.ServerOption{
 		server.WithInstructions(serverInstructions),
 		server.WithToolCapabilities(false),
 		server.WithToolHandlerMiddleware(tel.middleware),
-	)
+	}
+	if o.compact {
+		// Registered after telemetry, so it runs inside it and spans see the full result.
+		srvOpts = append(srvOpts, server.WithToolHandlerMiddleware(compactMiddleware))
+	}
+	s := server.NewMCPServer(ServerName, version, srvOpts...)
 	register(s, svc)
 	return s, nil
 }
