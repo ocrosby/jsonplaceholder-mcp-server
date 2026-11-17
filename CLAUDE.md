@@ -21,7 +21,7 @@ Go MCP server exposing read-only tools over jsonplaceholder.typicode.com. Mirror
 
 ## Adding a tool
 
-Add the method to `ports.ResourceSource`, then the client, the service (validation), a `register*` function in `tools.go`, the name in `ToolNames`, and the instructions text. Prefer a filter on an existing list tool over a new tool (nested routes are filters).
+Add the method to `ports.ResourceSource`, then the client, the service (validation), a `register*` function in `tools.go`, an entry in `toolSpecs` (it feeds `ToolNames` and each tool's `_meta`), and the instructions text. Descriptions must lead with the words people ask with (a test enforces the resource noun). Prefer a filter on an existing list tool over a new tool (nested routes are filters).
 
 ## Commands
 
