@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "jsonplaceholder": {
+      "command": "go",
+      "args": ["run", "./cmd/jsonplaceholder-mcp-server"]
+    }
+  }
+}
